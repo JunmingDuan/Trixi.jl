@@ -1,7 +1,9 @@
 
 using OrdinaryDiffEq
-using Trixi
 using Plots
+using Trixi
+using Trixi2Vtk
+include("moving_mesh.jl")
 
 ###############################################################################
 # semidiscretization of the compressible Euler equations
@@ -33,14 +35,13 @@ function mapping(xi_, eta_)
   return SVector(x, y)
 end
 
-cells_per_dimension = (3, 4)
+cells_per_dimension = (5, 4)
 
 mesh = StructuredMesh(cells_per_dimension, mapping)
 
 solver = DGSEM(polydeg=3, surface_flux=flux_lax_friedrichs)
 
 semi = SemidiscretizationHyperbolic(mesh, equations, initial_condition, solver)
-
 
 ###############################################################################
 # ODE solvers, callbacks etc.
@@ -64,24 +65,38 @@ stepsize_callback = StepsizeCallback(cfl=1.0)
 
 visualization = VisualizationCallback(interval=20, show_mesh=true)
 
+mm_indicator = IndicatorGradient(semi,
+                                 alpha_max=0.5,
+                                 alpha_min=0.001,
+                                 smooth_iteration=5,
+                                 variable=density_pressure)
+mm_controller = MMController(semi, mm_indicator, max_iteration=5)
+mm_callback = MMCallback(semi, mm_controller,
+                         interval=5,
+                         adapt_initial_condition=5)
+
 callbacks = CallbackSet(summary_callback,
                         analysis_callback, alive_callback,
                         save_solution,
-                        stepsize_callback)
+                        stepsize_callback,
+                        mm_callback)
+###############################################################################
 
 ###############################################################################
 # run the simulation
+
+# initial mesh adaptation
+
+
 
 sol = solve(ode, CarpenterKennedy2N54(williamson_condition=false),
             dt=1.0, # solve needs some value here but it will be overwritten by the stepsize_callback
             save_everystep=false, callback=callbacks);
 summary_callback() # print the timer summary
+trixi2vtk(joinpath("out", "solution_000000.h5"), output_directory="out")
 
 # pd = ScalarPlotData2D(sol[1], semi)
 # pd = plot(sol[1], title="Error in density")
 pd = PlotData2D(sol)
 plot(pd["rho"], seriescolor = :heat)
 plot!(getmesh(pd))
-
-using Trixi2Vtk
-trixi2vtk(joinpath("out", "solution_000000.h5"), output_directory="out")
