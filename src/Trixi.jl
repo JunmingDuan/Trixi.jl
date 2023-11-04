@@ -283,6 +283,11 @@ export PlotData1D, PlotData2D, ScalarPlotData2D, getmesh, adapt_to_mesh_level!,
        adapt_to_mesh_level,
        iplot, iplot!
 
+# adaptive moving mesh
+include("moving_mesh/amm.jl")
+export IndicatorGradient, AMMCallback
+export AMMController
+
 function __init__()
     init_mpi()
 
