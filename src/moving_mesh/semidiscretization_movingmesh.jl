@@ -5,27 +5,57 @@
 @muladd begin
 #! format: noindent
 
-struct SimpleDuanTang end
-default_movingmesh_solver() = SimpleDuanTang()
+# struct SimpleDuanTang end
+# default_movingmesh_solver() = SimpleDuanTang()
 
 """
-    SemidiscretizationHyperbolicMovingMesh
+    SemidiscretizationMovingMesh
 
     A struct containing everything needed to describe a spatial semidiscretization
     of a hyperbolic conservation law on moving meshes.
 """
 
+struct SemidiscretizationMovingMesh{Mesh, Equations,
+                                    InitialCondition,
+                                    BoundaryConditions,
+                                    Solver,
+                                    Cache} <: AbstractSemidiscretization
+    mesh::Mesh
+    equations::Equations
 
-struct SemidiscretizationHyperbolicMovingMesh{Indices} <: AbstractSemidiscretization
-    semi_hyperbolic::SemidiscretizationHyperbolic
-    semi_movingmesh::SemidiscretizationMovingMesh
-    u_indices::Indices
-    # performance_counter::PerformanceCounterList{2}
+    initial_condition::InitialCondition
+    boundary_conditions::BoundaryConditions
+    solver::Solver
+    cache::Cache
     performance_counter::PerformanceCounter
+
+    function SemidiscretizationMovingMesh{Mesh, Equations,
+                                          InitialCondition,
+                                          BoundaryConditions,
+                                          Solver,
+                                          Cache
+                                          }(mesh::Mesh, equations::Equations,
+                                            initial_condition::InitialCondition,
+                                            boundary_conditions::BoundaryConditions,
+                                            solver::Solver,
+                                            cache::Cache,
+                                            ) where {Mesh,
+                                                     Equations,
+                                                     InitialCondition,
+                                                     BoundaryConditions,
+                                                     Solver,
+                                                     Cache}
+        @assert ndims(mesh) == ndims(equations)
+        performance_counter = PerformanceCounter()
+
+        new(mesh, equations, initial_condition,
+            boundary_conditions,
+            solver, cache, performance_counter)
+    end
 end
 
 """
-    SemidiscretizationHyperbolicMovingMesh(mesh, equations, initial_condition, solver;
+    SemidiscretizationMovingMesh(mesh, equations, initial_condition, solver;
                                  solver_movingmesh=default_movingmesh_solver(),
                                  source_terms=nothing,
                                  boundary_conditions=boundary_condition_periodic,
@@ -36,34 +66,68 @@ end
 
 Construct a semidiscretization of a hyperbolic PDE on moving meshes.
 """
-function SemidiscretizationHyperbolicMovingMesh(semi_hyperbolic, semi_movingmesh)
-    @assert ndims(semi_hyperbolic) == ndims(semi_movingmesh) "The hyperbolic and moving mesh part should have the same dimension"
-    @assert ndims(semi_hyperbolic.solver) == ndims(semi_movingmesh.solver) "The hyperbolic and moving mesh part should have the same solver"
-    # Number of coefficients for each semidiscretization
-    n_coefficients = zeros(Int, 2)
-    n_coefficients[1] = ndofs(semi_hyperbolic) * nvariables(semi_hyperbolic.equations)
-    n_coefficients[2] = ndofs(semi_hyperbolic) * nvariables(semi_movingmesh.equations)
+function SemidiscretizationMovingMesh(mesh, equations::Advection, initial_condition, solver;
+                                      boundary_conditions = boundary_condition_periodic,
+                                      # `RealT` is used as real type for node locations etc.
+                                      # while `uEltype` is used as element type of solutions etc.
+                                      RealT = real(solver), uEltype = RealT,
+                                      initial_cache = NamedTuple())
 
-    # Compute range of coefficients associated with each semidiscretization and allocate coupled BCs
-    u_indices = Vector{UnitRange{Int}}(undef, 2)
-    u_indices[1] = range(1, length = n_coefficients[1])
-    u_indices[2] = range(n_coefficients[1]+1, length = sum(n_coefficients))
-
-    performance_counter = PerformanceCounter()
-
-    SemidiscretizationHyperbolicMovingMesh{typeof(u_indices)
-                                          }(semi_hyperbolic,
-                                            semi_movingmesh,
-                                            u_indices,
-                                            performance_counter)
+    cache = (; create_cache(mesh, equations, solver, RealT, uEltype)...,
+            initial_cache...)                                    
+    SemidiscretizationMovingMesh(mesh, equations, initial_condition, solver;
+                                 solver_movingmesh,
+                                 boundary_conditions, boundary_conditions_movingmesh,
+                                 source_terms,
+                                 initial_cache = initial_cache_hyperbolic,
+                                 initial_cache_movingmesh = initial_cache_movingmesh)
 end
+
+function SemidiscretizationMovingMesh(mesh, equations, initial_condition, solver;
+                                      solver_movingmesh = default_movingmesh_solver(),
+                                      source_terms = nothing,
+                                      boundary_conditions = boundary_condition_periodic,
+                                      boundary_conditions_movingmesh = boundary_condition_periodic,
+                                      # `RealT` is used as real type for node locations etc.
+                                      # while `uEltype` is used as element type of solutions etc.
+                                      RealT = real(solver), uEltype = RealT,
+                                      initial_cache = NamedTuple(),
+                                      initial_cache_movingmesh = NamedTuple())
+
+    cache = (; create_cache(mesh, equations, solver, RealT, uEltype)...,
+             initial_cache...)
+    _boundary_conditions = digest_boundary_conditions(boundary_conditions, mesh, solver,
+                                                      cache)
+    _boundary_conditions_movingmesh = digest_boundary_conditions(boundary_conditions_movingmesh, mesh, solver,
+                                                      cache)
+    cache_movingmesh = (; create_cache_movingmesh(mesh, solver, RealT, uEltype)...,
+                        initial_cache_movingmesh...)
+
+    SemidiscretizationMovingMesh{typeof(mesh), typeof(equations),
+                                           typeof(initial_condition),
+                                           typeof(_boundary_conditions),
+                                           typeof(_boundary_conditions_movingmesh),
+                                           typeof(source_terms),
+                                           typeof(solver),
+                                           typeof(solver_movingmesh),
+                                           typeof(cache),
+                                           typeof(cache_movingmesh)}(mesh, equations,
+                                                                      initial_condition,
+                                                                      _boundary_conditions,
+                                                                      _boundary_conditions_movingmesh,
+                                                                      source_terms,
+                                                                      solver,
+                                                                      solver_movingmesh,
+                                                                      cache,
+                                                                      cache_movingmesh)
+  end
 
 # Create a new semidiscretization but change some parameters compared to the input.
 # `Base.similar` follows a related concept but would require us to `copy` the `mesh`,
 # which would impact the performance. Instead, `SciMLBase.remake` has exactly the
 # semantics we want to use here. In particular, it allows us to re-use mutable parts,
 # e.g. `remake(semi).mesh === semi.mesh`.
-function remake(semi::SemidiscretizationHyperbolicMovingMesh;
+function remake(semi::SemidiscretizationMovingMesh;
                 uEltype = real(semi.solver),
                 mesh = semi.mesh,
                 equations = semi.equations,
@@ -76,16 +140,16 @@ function remake(semi::SemidiscretizationHyperbolicMovingMesh;
     # TODO: Which parts do we want to `remake`? At least the solver needs some
     #       special care if shock-capturing volume integrals are used (because of
     #       the indicators and their own caches...).
-    SemidiscretizationHyperbolicMovingMesh(mesh, equations, initial_condition, solver;
+    SemidiscretizationMovingMesh(mesh, equations, initial_condition, solver;
                                            solver_movingmesh, source_terms,
                                            boundary_conditions, boundary_conditions_movingmesh,
                                            uEltype)
 end
 
-function Base.show(io::IO, semi::SemidiscretizationHyperbolicMovingMesh)
+function Base.show(io::IO, semi::SemidiscretizationMovingMesh)
     @nospecialize semi # reduce precompilation time
 
-    print(io, "SemidiscretizationHyperbolicMovingMesh(")
+    print(io, "SemidiscretizationMovingMesh(")
     print(io, semi.mesh)
     print(io, ", ", semi.equations)
     print(io, ", ", semi.initial_condition)
@@ -102,13 +166,13 @@ function Base.show(io::IO, semi::SemidiscretizationHyperbolicMovingMesh)
     print(io, "))")
 end
 
-function Base.show(io::IO, ::MIME"text/plain", semi::SemidiscretizationHyperbolicMovingMesh)
+function Base.show(io::IO, ::MIME"text/plain", semi::SemidiscretizationMovingMesh)
     @nospecialize semi # reduce precompilation time
 
     if get(io, :compact, false)
         show(io, semi)
     else
-        summary_header(io, "SemidiscretizationHyperbolicMovingMesh")
+        summary_header(io, "SemidiscretizationMovingMesh")
         summary_line(io, "#spatial dimensions", ndims(semi.equations))
         summary_line(io, "mesh", semi.mesh)
         summary_line(io, "equations", semi.equations |> typeof |> nameof)
@@ -125,17 +189,17 @@ function Base.show(io::IO, ::MIME"text/plain", semi::SemidiscretizationHyperboli
     end
 end
 
-@inline Base.ndims(semi::SemidiscretizationHyperbolicMovingMesh) = ndims(semi.mesh)
+@inline Base.ndims(semi::SemidiscretizationMovingMesh) = ndims(semi.mesh)
 
-@inline nvariables(semi::SemidiscretizationHyperbolicMovingMesh) = nvariables(semi.equations)
+@inline nvariables(semi::SemidiscretizationMovingMesh) = nvariables(semi.equations)
 
-@inline Base.real(semi::SemidiscretizationHyperbolicMovingMesh) = real(semi.solver)
+@inline Base.real(semi::SemidiscretizationMovingMesh) = real(semi.solver)
 
 # @inline function ndofs(mesh, solver_movingmesh <: SolverMovingMesh, cache_movingmesh)
     # ndofs(mesh, solver_movingmesh, cache_movingmesh)
 # end
 
-@inline function ndofs(semi::SemidiscretizationHyperbolicMovingMesh)
+@inline function ndofs(semi::SemidiscretizationMovingMesh)
     mesh, _, solver, solver_movingmesh, cache, _ = mesh_equations_solver_cache(semi)
     nd = ndofs(mesh, solver, cache)
     println("ndofs:", nd)
@@ -144,12 +208,12 @@ end
 end
 
 
-@inline function mesh_equations_solver_cache(semi::SemidiscretizationHyperbolicMovingMesh)
+@inline function mesh_equations_solver_cache(semi::SemidiscretizationMovingMesh)
     @unpack mesh, equations, solver, solver_movingmesh, cache, cache_movingmesh = semi
     return mesh, equations, solver, solver_movingmesh, cache, cache_movingmesh
 end
 
-function calc_error_norms(func, u_ode, t, analyzer, semi::SemidiscretizationHyperbolicMovingMesh,
+function calc_error_norms(func, u_ode, t, analyzer, semi::SemidiscretizationMovingMesh,
                           cache_analysis)
     @unpack mesh, equations, initial_condition, solver, cache = semi
     u = wrap_array(u_ode, mesh, equations, solver, cache)
@@ -158,7 +222,7 @@ function calc_error_norms(func, u_ode, t, analyzer, semi::SemidiscretizationHype
                      cache, cache_analysis)
 end
 
-function compute_coefficients(t, semi::SemidiscretizationHyperbolicMovingMesh)
+function compute_coefficients(t, semi::SemidiscretizationMovingMesh)
     compute_coefficients(semi.initial_condition, t, semi)
 end
 
@@ -221,7 +285,7 @@ end
 end
 
 
-function rhs!(du_ode, u_ode, semi::SemidiscretizationHyperbolicMovingMesh, t)
+function rhs!(du_ode, u_ode, semi::SemidiscretizationMovingMesh, t)
     @unpack mesh, equations, initial_condition, boundary_conditions, boundary_conditions_movingmesh, source_terms, solver, solver_movingmesh, cache, cache_movingmesh = semi
 
     u = wrap_array(u_ode, mesh, equations, solver, solver_movingmesh, cache, cache_movingmesh)
