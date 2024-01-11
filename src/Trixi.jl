@@ -242,8 +242,8 @@ export SemidiscretizationHyperbolic, semidiscretize, compute_coefficients, integ
 
 export SemidiscretizationHyperbolicParabolic
 
-include("moving_mesh/semidiscretization_hyperbolic_movingmesh.jl")
-export SemidiscretizationHyperbolicMovingMesh
+# include("moving_mesh/semidiscretization_hyperbolic_movingmesh.jl")
+# export SemidiscretizationHyperbolicMovingMesh
 
 export SemidiscretizationEulerAcoustics
 
